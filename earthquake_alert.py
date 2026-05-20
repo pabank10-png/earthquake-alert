@@ -19,7 +19,7 @@ SMTP_SERVER     = "smtp.gmail.com"
 SMTP_PORT       = 587
 
 MIN_MAGNITUDE   = 5.0
-HOURS_BACK      = 0.25  # 15 นาที (ทับซ้อนเพื่อไม่พลาด)
+HOURS_BACK      = 1.0  # 15 นาที (ทับซ้อนเพื่อไม่พลาด)
 SENT_FILE       = "sent_earthquakes.json"
 # ============================================================
 
