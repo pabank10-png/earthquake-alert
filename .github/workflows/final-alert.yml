@@ -23,9 +23,12 @@ jobs:
           restore-keys: |
             earthquake-history-
 
-      # เพิ่มขั้นตอนนี้เพื่อให้มั่นใจว่ามีไฟล์ให้ GitHub เซฟลง Cache เสมอ
+      # เพิ่มขั้นตอนนี้แบบฉลาดขึ้น: ถ้าไม่มีไฟล์ ให้สร้างไฟล์ที่มีข้อความ []
       - name: Ensure cache file exists
-        run: touch sent_earthquakes.json
+        run: |
+          if [ ! -f sent_earthquakes.json ]; then
+            echo "[]" > sent_earthquakes.json
+          fi
 
       - name: Install dependencies
         run: pip install -r requirements.txt
