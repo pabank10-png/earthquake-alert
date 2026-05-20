@@ -47,3 +47,4 @@ jobs:
           EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
         run: |
           python earthquake_alert.py
+          
