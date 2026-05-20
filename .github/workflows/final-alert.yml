@@ -15,7 +15,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # --- เพิ่มส่วนนี้เข้าไป ---
       - name: Cache earthquake history
         uses: actions/cache@v4
         with:
@@ -23,7 +22,10 @@ jobs:
           key: earthquake-history-${{ runner.os }}
           restore-keys: |
             earthquake-history-
-      # ------------------------
+
+      # เพิ่มขั้นตอนนี้เพื่อให้มั่นใจว่ามีไฟล์ให้ GitHub เซฟลง Cache เสมอ
+      - name: Ensure cache file exists
+        run: touch sent_earthquakes.json
 
       - name: Install dependencies
         run: pip install -r requirements.txt
