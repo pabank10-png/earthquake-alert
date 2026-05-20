@@ -192,6 +192,31 @@ def send_email(events):
         return False
 
 if __name__ == "__main__":
+    if os.getenv("TEST_MODE", "false").lower() == "true":
+        print("🧪 TEST_MODE เปิดอยู่: ส่งแจ้งเตือนทดสอบ")
+
+        test_event = {
+            "id": f"test-{datetime.now(ICT).strftime('%Y%m%d%H%M')}",
+            "mag": 5.9,
+            "place": "TEST ALERT - ระบบทดสอบแจ้งเตือนแผ่นดินไหว",
+            "time": datetime.now(ICT).strftime("%d %b %Y %H:%M ICT"),
+            "depth": 10.0,
+            "lat": 13.7563,
+            "lon": 100.5018,
+            "usgs_url": "https://earthquake.usgs.gov/",
+            "map_url": "https://www.google.com/maps?q=13.7563,100.5018",
+        }
+
+        line_ok = send_line([test_event])
+        email_ok = send_email([test_event])
+
+        if line_ok and email_ok:
+            print("✅ ส่ง TEST alert สำเร็จ")
+        else:
+            print("⚠️ ส่ง TEST alert บางช่องทางไม่สำเร็จ")
+
+        raise SystemExit(0)
+
     print(f"🔍 กำลังดึงข้อมูลแผ่นดินไหว ≥ {MIN_MAGNITUDE} ย้อนหลัง {HOURS_BACK*60:.0f} นาที...")
     try:
         features = fetch_earthquakes()
@@ -201,17 +226,17 @@ if __name__ == "__main__":
         # กรองเฉพาะแผ่นดินไหวใหม่
         sent_ids = load_sent_ids()
         new_events = [e for e in events if e['id'] not in sent_ids]
-        
+
         if new_events:
             print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
             send_line(new_events)
             send_email(new_events)
-            
+
             for event in new_events:
                 save_sent_id(event['id'])
         else:
             print("✅ ไม่มีแผ่นดินไหวใหม่")
-        
+
         print("\n✅ สำเร็จทั้งหมด!")
     except Exception as e:
         print(f"\n❌ เกิดข้อผิดพลาด: {e}")
