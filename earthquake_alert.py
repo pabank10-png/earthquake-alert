@@ -19,7 +19,7 @@ SMTP_SERVER     = "smtp.gmail.com"
 SMTP_PORT       = 587
 
 MIN_MAGNITUDE   = 5.0
-HOURS_BACK      = 1.0  # 15 นาที (ทับซ้อนเพื่อไม่พลาด)
+HOURS_BACK      = 0.25  # 15 นาที (ทับซ้อนเพื่อไม่พลาด)
 SENT_FILE       = "sent_earthquakes.json"
 # ============================================================
 
@@ -42,22 +42,27 @@ def save_sent_id(eq_id):
         json.dump(list(sent_ids)[-200:], f)
 
 def fetch_earthquakes():
-    """ดึงข้อมูลแผ่นดินไหวจาก USGS API"""
-    end   = datetime.now(timezone.utc)
-    start = end - timedelta(hours=HOURS_BACK)
+    """ดึงข้อมูลโดยอิงจากเวลาที่ข้อมูล 'ถูกโพสต์หรืออัปเดต' เข้า API"""
+    # คำนวณเวลาถอยหลัง (UTC)
+    now = datetime.now(timezone.utc)
+    updated_after = now - timedelta(hours=HOURS_BACK)
+    
     url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
     params = {
-        "format":       "geojson",
-        "starttime":    start.strftime("%Y-%m-%dT%H:%M:%S"),
-        "endtime":      end.strftime("%Y-%m-%dT%H:%M:%S"),
+        "format": "geojson",
+        "updatedafter": updated_after.strftime("%Y-%m-%dT%H:%M:%S"), # ดึงสิ่งที่อัปเดตหลังเวลานี้
         "minmagnitude": MIN_MAGNITUDE,
-        "orderby":      "time",
-        "limit":        50,
-        "minlatitude":  -15,
-        "maxlatitude":  30,
+        "orderby": "time", # ยังคงเรียงตามเวลาเกิดเหตุเพื่อให้ดูง่าย
+        # ขอบเขตพื้นที่เดิม
+        "minlatitude": -15,
+        "maxlatitude": 30,
         "minlongitude": 88,
         "maxlongitude": 145
     }
+    
+    # พิมพ์ Log เพื่อให้ตรวจสอบใน GitHub Actions ได้ง่ายขึ้น
+    print(f"🕒 ดึงข้อมูลที่ 'อัปเดต' หลังเวลา: {updated_after.astimezone(ICT).strftime('%H:%M:%S')} ICT")
+    
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json().get("features", [])
