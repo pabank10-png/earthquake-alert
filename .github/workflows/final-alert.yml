@@ -20,7 +20,7 @@ jobs:
 
       - name: Run earthquake alert
         env:
-          TEST_MODE: "true"
+          TEST_MODE: "false"
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
