@@ -1,7 +1,7 @@
 import os
+import json
 import requests
 import smtplib
-import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
@@ -14,18 +14,35 @@ LINE_GROUP_ID             = os.getenv("LINE_GROUP_ID", "")
 
 EMAIL_SENDER    = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASSWORD  = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_RECEIVERS = os.getenv("EMAIL_RECEIVERS", "").split(",")  # แยกด้วย comma
+EMAIL_RECEIVERS = os.getenv("EMAIL_RECEIVERS", "").split(",")
 SMTP_SERVER     = "smtp.gmail.com"
 SMTP_PORT       = 587
 
 MIN_MAGNITUDE   = 5.0
-HOURS_BACK      = 0.25  # 15 นาที (เพราะรันทุก 5 นาที จะได้ไม่พลาด)
+HOURS_BACK      = 0.25  # 15 นาที (ทับซ้อนเพื่อไม่พลาด)
+SENT_FILE       = "sent_earthquakes.json"
 # ============================================================
 
 ICT = timezone(timedelta(hours=7))
 
+def load_sent_ids():
+    """โหลด ID แผ่นดินไหวที่แจ้งไปแล้ว"""
+    try:
+        with open(SENT_FILE, 'r') as f:
+            return set(json.load(f))
+    except FileNotFoundError:
+        return set()
+
+def save_sent_id(eq_id):
+    """บันทึก ID แผ่นดินไหวที่แจ้งไปแล้ว"""
+    sent_ids = load_sent_ids()
+    sent_ids.add(eq_id)
+    # เก็บแค่ 200 รายการล่าสุด
+    with open(SENT_FILE, 'w') as f:
+        json.dump(list(sent_ids)[-200:], f)
+
 def fetch_earthquakes():
-    """ดึงข้อมูลแผ่นดินไหวจาก USGS API - Southeast Asia + ทะเลรอบข้าง"""
+    """ดึงข้อมูลแผ่นดินไหวจาก USGS API"""
     end   = datetime.now(timezone.utc)
     start = end - timedelta(hours=HOURS_BACK)
     url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -36,7 +53,6 @@ def fetch_earthquakes():
         "minmagnitude": MIN_MAGNITUDE,
         "orderby":      "time",
         "limit":        50,
-        # 🌏 Southeast Asia + ทะเลรอบข้าง
         "minlatitude":  -15,
         "maxlatitude":  30,
         "minlongitude": 88,
@@ -44,13 +60,14 @@ def fetch_earthquakes():
     }
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
-    data = resp.json()
-    return data.get("features", [])
+    return resp.json().get("features", [])
 
 def parse_event(eq):
-    """แปลงข้อมูลแผ่นดินไหวให้อ่านง่าย"""
+    """แปลงข้อมูลแผ่นดินไหว"""
     props = eq["properties"]
-    coords = eq["geometry"]["coordinates"]  # [lon, lat, depth]
+    coords = eq["geometry"]["coordinates"]
+    eq_id = eq.get("id", "")
+    
     lon, lat = coords[0], coords[1]
     depth    = coords[2]
     mag      = props.get("mag", 0)
@@ -59,29 +76,27 @@ def parse_event(eq):
     dt_ict   = datetime.fromtimestamp(ts, tz=ICT).strftime("%d %b %Y %H:%M ICT")
     usgs_url = props.get("url", "")
     map_url  = f"https://www.google.com/maps?q={lat},{lon}"
-    alert    = props.get("alert") or "-"
+    
     return {
+        "id": eq_id,
         "mag": mag, "place": place, "time": dt_ict,
         "depth": depth, "lat": lat, "lon": lon,
-        "usgs_url": usgs_url, "map_url": map_url, "alert": alert
+        "usgs_url": usgs_url, "map_url": map_url
     }
 
 def magnitude_emoji(mag):
-    """เลือก Emoji ตามความรุนแรง"""
     if mag >= 8:   return "🔴🔴"
     elif mag >= 7: return "🔴"
     elif mag >= 6: return "🟠"
     else:          return "🟡"
 
-# ─── LINE ───────────────────────────────────────────────────
 def send_line(events):
-    """ส่งแจ้งเตือนไป LINE Group"""
+    """ส่งแจ้งเตือนไป LINE"""
     if not events:
-        print("✅ ไม่พบแผ่นดินไหวใหม่")
         return True
     
     lines = [f"🌍 แจ้งเตือนแผ่นดินไหว (≥ {MIN_MAGNITUDE})\n"]
-    for i, e in enumerate(events[:10], 1):  # LINE จำกัดตัวอักษร แสดงแค่ 10 อันดับแรก
+    for i, e in enumerate(events[:10], 1):
         em = magnitude_emoji(e['mag'])
         lines.append(
             f"{em} [{i}] M{e['mag']} — {e['place']}\n"
@@ -99,7 +114,7 @@ def send_line(events):
     }
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type":  "application/json"
+        "Content-Type": "application/json"
     }
     try:
         resp = requests.post(
@@ -116,11 +131,9 @@ def send_line(events):
         print(f"❌ LINE Exception: {e}")
         return False
 
-# ─── EMAIL ──────────────────────────────────────────────────
 def send_email(events):
-    """ส่ง Email สรุปแผ่นดินไหว"""
+    """ส่ง Email"""
     if not events:
-        print("✅ ไม่มีแผ่นดินไหวให้ส่ง Email")
         return True
     
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
@@ -138,7 +151,7 @@ def send_email(events):
             <td style="text-align:center">{e['time']}</td>
             <td style="text-align:center">{e['depth']:.1f} กม.</td>
             <td style="text-align:center">
-                <a href="{e['map_url']}" style="color:#1a73e8">📍 Google Map</a>
+                <a href="{e['map_url']}" style="color:#1a73e8">📍 Map</a>
             </td>
             <td style="text-align:center">
                 <a href="{e['usgs_url']}" style="color:#1a73e8">🔗 USGS</a>
@@ -148,13 +161,12 @@ def send_email(events):
     body_html = f"""
     <html><body style="font-family:Arial,sans-serif;padding:20px">
     <h2 style="color:#c0392b">🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE}</h2>
-    <p>พบทั้งหมด <b>{len(events)} รายการ</b> | ดึงข้อมูลเมื่อ {now_str}</p>
-    <table border="1" cellpadding="8" cellspacing="0"
-           style="border-collapse:collapse;width:100%;font-size:14px">
+    <p>พบทั้งหมด <b>{len(events)} รายการ</b> | {now_str}</p>
+    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:14px">
         <thead style="background:#2c3e50;color:white">
             <tr>
                 <th>#</th><th>ขนาด</th><th>สถานที่</th>
-                <th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th>
+                <th>เวลา</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th>
             </tr>
         </thead>
         <tbody>{rows}</tbody>
@@ -164,37 +176,43 @@ def send_email(events):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = EMAIL_SENDER
-    msg["To"]      = ", ".join(EMAIL_RECEIVERS)
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = ", ".join(EMAIL_RECEIVERS)
     msg.attach(MIMEText(body_html, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
             server.starttls()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
         print("✅ Email ส่งสำเร็จ")
         return True
-    except smtplib.SMTPAuthenticationError:
-        print("❌ Email Error: ไม่สามารถ Login ได้")
-        return False
     except Exception as e:
         print(f"❌ Email Error: {e}")
         return False
 
-# ─── MAIN ───────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"🔍 กำลังดึงข้อมูลแผ่นดินไหว ≥ {MIN_MAGNITUDE} ย้อนหลัง {HOURS_BACK*60:.0f} นาที...")
     try:
         features = fetch_earthquakes()
-        events   = [parse_event(f) for f in features]
+        events = [parse_event(f) for f in features]
         print(f"📊 พบ {len(events)} รายการ")
 
-        send_line(events)
-        send_email(events)
+        # กรองเฉพาะแผ่นดินไหวใหม่
+        sent_ids = load_sent_ids()
+        new_events = [e for e in events if e['id'] not in sent_ids]
+        
+        if new_events:
+            print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
+            send_line(new_events)
+            send_email(new_events)
+            
+            for event in new_events:
+                save_sent_id(event['id'])
+        else:
+            print("✅ ไม่มีแผ่นดินไหวใหม่")
         
         print("\n✅ สำเร็จทั้งหมด!")
     except Exception as e:
         print(f"\n❌ เกิดข้อผิดพลาด: {e}")
-        raise  # ให้ GitHub Actions เห็น Error
+        raise
