@@ -1,10 +1,8 @@
 name: Earthquake Alert
-
 on:
   schedule:
-  - cron: '* * * * *'  # เปลี่ยนเป็นทุก 1 นาที
-  workflow_dispatch:  # สามารถรันด้วยตัวเองได้
-
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 jobs:
   check-earthquake:
     runs-on: ubuntu-latest
