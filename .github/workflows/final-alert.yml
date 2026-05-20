@@ -15,12 +15,21 @@ jobs:
         with:
           python-version: '3.11'
 
+      # --- เพิ่มส่วนนี้เข้าไป ---
+      - name: Cache earthquake history
+        uses: actions/cache@v4
+        with:
+          path: sent_earthquakes.json
+          key: earthquake-history-${{ runner.os }}
+          restore-keys: |
+            earthquake-history-
+      # ------------------------
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run earthquake alert
         env:
-          TEST_MODE: "false"
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
