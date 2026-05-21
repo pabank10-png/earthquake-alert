@@ -3,6 +3,10 @@ name: Earthquake Auto Alert
 on:
   workflow_dispatch:
 
+concurrency:
+  group: earthquake-auto-alert
+  cancel-in-progress: false
+
 jobs:
   check-earthquake:
     runs-on: ubuntu-latest
@@ -13,21 +17,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Cache earthquake history
-        uses: actions/cache@v4
+      - name: Restore earthquake history
+        id: earthquake-history
+        uses: actions/cache/restore@v4
         with:
           path: sent_earthquakes.json
-          key: earthquake-history-${{ runner.os }}
+          key: earthquake-history-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            earthquake-history-
+            earthquake-history-${{ runner.os }}-
 
-      # เพิ่มขั้นตอนนี้แบบฉลาดขึ้น: ถ้าไม่มีไฟล์ ให้สร้างไฟล์ที่มีข้อความ []
-      - name: Ensure cache file exists
+      - name: Ensure history file exists
         run: |
           if [ ! -f sent_earthquakes.json ]; then
-            echo "[]" > sent_earthquakes.json
+            printf '[]\n' > sent_earthquakes.json
           fi
 
       - name: Install dependencies
@@ -41,3 +45,10 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
         run: python earthquake_alert.py
+
+      - name: Save earthquake history
+        if: ${{ success() && hashFiles('sent_earthquakes.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: sent_earthquakes.json
+          key: earthquake-history-${{ runner.os }}-${{ github.run_id }}
