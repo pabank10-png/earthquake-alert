@@ -35,11 +35,9 @@ MONITORED_POINTS = [
 ]
 RADIUS_KM = 600
 
-# ============================================================
 ICT = timezone(timedelta(hours=7))
 
 def haversine(lat1, lon1, lat2, lon2):
-    """คำนวณระยะทางระหว่าง 2 จุด (กิโลเมตร)"""
     R = 6371
     dLat = radians(lat2 - lat1)
     dLon = radians(lon2 - lon1)
@@ -48,51 +46,39 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 def is_target_location(event):
-    """ตรวจสอบพื้นที่: SEA / มหาสมุทร / รัศมี 600 กม. จากจุดเฝ้าระวัง"""
     place = event['place'].lower()
     lat, lon = event['lat'], event['lon']
-
-    # 1. รายชื่อคำสำคัญใน SEA และมหาสมุทร
     sea_keywords = [
         "thailand", "myanmar", "burma", "laos", "vietnam", "cambodia",
         "malaysia", "singapore", "indonesia", "philippines", "brunei",
         "timor-leste", "papua new guinea", "andaman", "sumatra", "java",
         "sulawesi", "borneo", "luzon", "mindanao", "molucca", "banda sea",
         "celebes sea", "sulu sea", "south china sea", "gulf of thailand",
-        "sea", "ocean" # ครอบคลุมพื้นที่ทางทะเลทั้งหมด
+        "sea", "ocean"
     ]
-
-    if any(k in place for k in sea_keywords):
-        return True
-
-    # 2. ตรวจสอบรัศมี 600 กม. จากจุดเฝ้าระวังใหม่
+    if any(k in place for k in sea_keywords): return True
     for point in MONITORED_POINTS:
-        if haversine(point['lat'], point['lon'], lat, lon) <= RADIUS_KM:
-            return True
-
+        if haversine(point['lat'], point['lon'], lat, lon) <= RADIUS_KM: return True
     return False
 
 def load_sent_ids():
     try:
         with open(SENT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-    return [str(item) for item in data if item] if isinstance(data, list) else []
+        return [str(item) for item in data if item] if isinstance(data, list) else []
+    except: return []
 
 def save_sent_ids(sent_ids):
     unique_ids = list(dict.fromkeys(str(item) for item in sent_ids if item))
     recent_ids = unique_ids[-MAX_HISTORY:]
     with open(SENT_FILE, "w", encoding="utf-8") as f:
         json.dump(recent_ids, f, ensure_ascii=False, indent=2)
-    print(f"💾 บันทึกประวัติแล้ว {len(recent_ids)} รายการ")
+    print(f"💾 บันทึก history แล้ว {len(recent_ids)} IDs")
 
 def fetch_earthquakes():
-    """ดึงข้อมูลล่าสุดจากทั่วโลก (เพื่อครอบคลุมจุดเฝ้าระวังใหม่)"""
     now = datetime.now(timezone.utc)
     updated_after = now - timedelta(hours=HOURS_BACK)
     event_start_time = now - timedelta(hours=MAX_EVENT_AGE_HOURS)
-    
     url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
     params = {
         "format": "geojson",
@@ -101,35 +87,24 @@ def fetch_earthquakes():
         "minmagnitude": MIN_MAGNITUDE,
         "orderby": "time"
     }
-    print(f"📡 ตรวจสอบข้อมูลที่อัปเดตหลัง: {updated_after.astimezone(ICT).strftime('%H:%M:%S')} ICT")
+    print(f"⚪ ดึงข้อมูลที่ 'อัปเดต' หลังเวลา: {updated_after.astimezone(ICT).strftime('%H:%M:%S')} ICT")
+    print(f"📅 รับเฉพาะเหตุการณ์ที่เกิดหลังเวลา: {event_start_time.astimezone(ICT).strftime('%d %b %Y %H:%M ICT')}")
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json().get("features", [])
 
 def build_event_id(eq):
-    props = eq.get("properties", {})
-    geometry = eq.get("geometry") or {}
-    coords = geometry.get("coordinates") or [None, None, None]
-    usgs_id = eq.get("id")
-    if usgs_id: return str(usgs_id)
-    lon, lat, depth = coords[:3]
-    return f"{props.get('time')}|{props.get('mag')}|{lat}|{lon}|{depth}"
+    props = eq["properties"]; coords = eq["geometry"]["coordinates"]
+    if eq.get("id"): return str(eq.get("id"))
+    return f"{props.get('time')}|{props.get('mag')}|{coords[1]}|{coords[0]}|{coords[2]}"
 
 def parse_event(eq):
-    props = eq["properties"]
-    coords = eq["geometry"]["coordinates"]
-    ts = props.get("time", 0) / 1000
-    event_dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+    props = eq["properties"]; coords = eq["geometry"]["coordinates"]
+    ts = props.get("time", 0) / 1000; ev_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
     return {
-        "id": build_event_id(eq),
-        "mag": props.get("mag", 0),
-        "place": props.get("place", "Unknown"),
-        "time": event_dt_utc.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"),
-        "event_dt_utc": event_dt_utc,
-        "depth": coords[2],
-        "lat": coords[1],
-        "lon": coords[0],
-        "usgs_url": props.get("url", ""),
+        "id": build_event_id(eq), "mag": props.get("mag", 0), "place": props.get("place", "Unknown"),
+        "time": ev_dt.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"), "event_dt_utc": ev_dt,
+        "depth": coords[2], "lat": coords[1], "lon": coords[0], "usgs_url": props.get("url", ""),
         "map_url": f"https://www.google.com/maps?q={coords[1]},{coords[0]}"
     }
 
@@ -139,20 +114,15 @@ def magnitude_emoji(mag):
     if mag >= 6: return "🟠"
     return "🟡"
 
-def is_recent_event(event, now_utc):
-    return timedelta(0) <= (now_utc - event["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS)
-
 def send_line(events):
-    if not events: return True
     lines = [f"🌍 แจ้งเตือนแผ่นดินไหว (≥ {MIN_MAGNITUDE})\n"]
     for i, e in enumerate(events[:10], 1):
-        lines.append(f"{magnitude_emoji(e['mag'])} [{i}] M{e['mag']} — {e['place']}\n   🕐 {e['time']}\n   📍 ลึก {e['depth']:.1f} กม.\n   🗺 {e['map_url']}\n")
+        lines.append(f"{magnitude_emoji(e['mag'])} [{i}] M{e['mag']} — {e['place']}\n   🕐 {e['time']}\n   📍 ความลึก {e['depth']:.1f} กม.\n   🗺 {e['map_url']}\n")
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
     resp = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json={"to": LINE_GROUP_ID, "messages": [{"type": "text", "text": "\n".join(lines)}]}, timeout=15)
     return resp.status_code == 200
 
 def send_email(events):
-    if not events: return True
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
     rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td></tr>" for i, e in enumerate(events)])
     body = f"<html><body><h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE}</h2><table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'><thead><tr style='background:#2c3e50;color:white'><th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th></tr></thead><tbody>{rows}</tbody></table></body></html>"
@@ -164,25 +134,30 @@ def send_email(events):
     except: return False
 
 if __name__ == "__main__":
+    print(f"🔍 กำลังดึงข้อมูลแผ่นดินไหว ≥ {MIN_MAGNITUDE} ที่ API อัปเดตย้อนหลัง {HOURS_BACK*60:.0f} นาที และเกิดจริงไม่เกิน {MAX_EVENT_AGE_HOURS} ชั่วโมง...")
     try:
-        sent_ids = load_sent_ids()
+        sent_ids = load_sent_ids(); sent_id_set = set(sent_ids)
+        print(f"📚 โหลด history มาแล้ว {len(sent_ids)} IDs")
         fetched_features = fetch_earthquakes()
         parsed_events = [parse_event(f) for f in fetched_features]
+        print(f"📊 พบจาก USGS {len(parsed_events)} รายการ")
         
         now_utc = datetime.now(timezone.utc)
-        # กรอง 1: ตามเวลาเกิดเหตุ
-        recent_events = [e for e in parsed_events if is_recent_event(e, now_utc)]
-        # กรอง 2: ตามพื้นที่ที่สนใจ
-        filtered_events = [e for e in recent_events if is_target_location(e)]
-        # กรอง 3: ป้องกันแจ้งซ้ำ
-        new_events = [e for e in filtered_events if e["id"] not in set(sent_ids)]
+        events = [e for e in parsed_events if (timedelta(0) <= (now_utc - e["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS))]
+        print(f"📊 เหลือ event ที่เวลาเกิดอยู่ในช่วงที่อนุญาต {len(events)} รายการ")
+        
+        filtered_events = [e for e in events if is_target_location(e)]
+        new_events = [e for e in filtered_events if e["id"] not in sent_id_set]
 
         if new_events:
-            print(f"🆕 พบรายการใหม่ {len(new_events)} รายการ")
+            print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
+            for event in new_events: print(f"   - {event['id']} | M{event['mag']} | {event['place']}")
             if send_line(new_events) and send_email(new_events):
                 save_sent_ids(sent_ids + [e["id"] for e in new_events])
+            else: print("⚠️ ส่งแจ้งเตือนไม่สำเร็จ")
         else:
-            print("✅ ไม่มีแผ่นดินไหวใหม่ในพื้นที่เฝ้าระวัง")
+            print("✅ ไม่มีแผ่นดินไหวใหม่")
             save_sent_ids(sent_ids)
+        print("\n✅ สำเร็จทั้งหมด!")
     except Exception as e:
-        print(f"❌ Error: {e}"); raise
+        print(f"\n❌ เกิดข้อผิดพลาด: {e}"); raise
