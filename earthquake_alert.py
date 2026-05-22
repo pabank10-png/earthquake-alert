@@ -124,12 +124,43 @@ def send_line(events):
 
 def send_email(events):
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
-    rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td></tr>" for i, e in enumerate(events)])
-    body = f"<html><body><h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE}</h2><table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'><thead><tr style='background:#2c3e50;color:white'><th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th></tr></thead><tbody>{rows}</tbody></table></body></html>"
-    msg = MIMEMultipart("alternative"); msg["Subject"] = f"🌍 แจ้งเตือนแผ่นดินไหว | {now_str}"; msg["From"] = EMAIL_SENDER; msg["To"] = ", ".join(EMAIL_RECEIVERS); msg.attach(MIMEText(body, "html", "utf-8"))
+    rows = ""
+    for i, e in enumerate(events):
+        rows += f"""
+        <tr>
+            <td style='text-align:center'>{i+1}</td>
+            <td style='text-align:center;font-weight:bold'>M{e['mag']}</td>
+            <td>{e['place']}</td>
+            <td style='text-align:center'>{e['time']}</td>
+            <td style='text-align:center'>{e['depth']:.1f} กม.</td>
+            <td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td>
+            <td style='text-align:center'><a href='{e['usgs_url']}'>🔗 USGS</a></td>
+        </tr>"""
+    
+    body = f"""
+    <html><body>
+        <h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE}</h2>
+        <table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'>
+            <thead>
+                <tr style='background:#2c3e50;color:white'>
+                    <th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th>
+                </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+        </table>
+    </body></html>"""
+    
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🌍 แจ้งเตือนแผ่นดินไหว | {now_str}"
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = ", ".join(EMAIL_RECEIVERS)
+    msg.attach(MIMEText(body, "html", "utf-8"))
+    
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls(); server.login(EMAIL_SENDER, EMAIL_PASSWORD); server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
+            server.starttls()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
         return True
     except: return False
 
