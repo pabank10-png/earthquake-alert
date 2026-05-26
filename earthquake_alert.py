@@ -19,22 +19,20 @@ EMAIL_RECEIVERS = [email.strip() for email in os.getenv("EMAIL_RECEIVERS", "").s
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 MIN_MAGNITUDE = 5.0
-HOURS_BACK = 0.25
-MAX_EVENT_AGE_HOURS = 36
+HOURS_BACK = 0.25 
+MAX_EVENT_AGE_HOURS = 36 
 SENT_FILE = "sent_earthquakes.json"
 MAX_HISTORY = 200
 
-# 📍 รายการจุดที่ต้องการติดตามเพิ่มเติม (รัศมี 600 กม.)
 MONITORED_POINTS = [
-    {"lat": 39.60594025, "lon": -8.852126644},  # Portugal
-    {"lat": 52.50569518, "lon": 5.084352641},   # Netherlands 1
-    {"lat": 52.00712918, "lon": 4.165127331},   # Netherlands 2
-    {"lat": 51.56344144, "lon": 5.706959515},   # Netherlands 3
-    {"lat": 52.41243645, "lon": 4.828799606},   # Netherlands 4
-    {"lat": 52.40515851, "lon": 5.244806542}    # Netherlands 5
+    {"lat": 39.60594025, "lon": -8.852126644},
+    {"lat": 52.50569518, "lon": 5.084352641},
+    {"lat": 52.00712918, "lon": 4.165127331},
+    {"lat": 51.56344144, "lon": 5.706959515},
+    {"lat": 52.41243645, "lon": 4.828799606},
+    {"lat": 52.40515851, "lon": 5.244806542}
 ]
 RADIUS_KM = 600
-
 ICT = timezone(timedelta(hours=7))
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -75,86 +73,84 @@ def save_sent_ids(sent_ids):
         json.dump(recent_ids, f, ensure_ascii=False, indent=2)
     print(f"💾 บันทึก history แล้ว {len(recent_ids)} IDs")
 
-# ============================================================
-# 🔄 ดึงข้อมูลจาก EMSC SeismicPortal (แทน USGS)
-# EMSC FDSN endpoint เข้ากันได้กับ USGS แต่ข้อมูลออกเร็วกว่า
-# เพราะ EMSC รวบรวมจากหลาย agency พร้อมกัน
-# ============================================================
 def fetch_earthquakes():
+    """ดึงข้อมูลจาก EMSC - จัดการ Error กรณีข้อมูลว่าง"""
     now = datetime.now(timezone.utc)
     updated_after = now - timedelta(hours=HOURS_BACK)
     event_start_time = now - timedelta(hours=MAX_EVENT_AGE_HOURS)
-
+    
     url = "https://www.seismicportal.eu/fdsnws/event/1/query"
     params = {
-        "format":       "json",           # EMSC ใช้ "json" (USGS ใช้ "geojson")
+        "format": "json",
         "updatedafter": updated_after.strftime("%Y-%m-%dT%H:%M:%S"),
-        "start":        event_start_time.strftime("%Y-%m-%dT%H:%M:%S"),  # EMSC ใช้ "start" (USGS ใช้ "starttime")
-        "minmag":       MIN_MAGNITUDE,    # EMSC ใช้ "minmag" (USGS ใช้ "minmagnitude")
-        "orderby":      "time",
-        "limit":        500
+        "start": event_start_time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "minmag": MIN_MAGNITUDE,
+        "orderby": "time"
     }
-
-    print(f"⚪ [EMSC] ดึงข้อมูลที่ 'อัปเดต' หลังเวลา: {updated_after.astimezone(ICT).strftime('%H:%M:%S')} ICT")
-    print(f"📅 รับเฉพาะเหตุการณ์ที่เกิดหลังเวลา: {event_start_time.astimezone(ICT).strftime('%d %b %Y %H:%M ICT')}")
-
+    
+    print(f"⚪ [EMSC] ดึงข้อมูลอัปเดตหลัง: {updated_after.astimezone(ICT).strftime('%H:%M:%S')} ICT")
+    
     resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
+    
+    # แก้ไขปัญหา JSON เปล่าที่ทำให้ Error
+    if resp.status_code == 204 or not resp.text.strip():
+        return []
+    
+    try:
+        # EMSC จะส่งมาเป็นรายบรรทัด (NDJSON) หรือ JSON ก้อนเดียว
+        # เราต้องตรวจสอบว่ามีคำว่า "features" ไหม (ถ้าใช้ format: json แบบ GeoJSON)
+        data = resp.json()
+        if isinstance(data, dict) and "features" in data:
+            return data["features"]
+        elif isinstance(data, list):
+            return data
+        return []
+    except:
+        # ถ้าพยายามแกะ JSON แล้วพัง ให้ลองกวาดเป็นบรรทัด (กันเหนียว)
+        events = []
+        for line in resp.text.strip().split('\n'):
+            try: events.append(json.loads(line))
+            except: continue
+        return events
 
-    data = resp.json()
-
-    # EMSC ส่งกลับในรูปแบบ {"type":"FeatureCollection","features":[...]}
-    # ซึ่งเหมือน GeoJSON ของ USGS ทุกประการ
-    return data.get("features", [])
-
-# ============================================================
-# 🔧 parse event จาก EMSC feature
-# EMSC ใช้ field ชื่อต่างกันเล็กน้อยจาก USGS
-# ============================================================
 def build_event_id(eq):
-    # EMSC ใช้ field "unid" เป็น unique ID หลัก
-    props = eq.get("properties", {})
-    coords = eq["geometry"]["coordinates"]
-    if eq.get("id"):
-        return str(eq.get("id"))
-    if props.get("unid"):
-        return str(props.get("unid"))
-    return f"{props.get('time')}|{props.get('mag')}|{coords[1]}|{coords[0]}|{coords[2]}"
+    # EMSC มี field ต่างจาก USGS เล็กน้อย
+    if isinstance(eq, dict):
+        props = eq.get("properties", eq)
+        unid = props.get("unid") or eq.get("id")
+        if unid: return str(unid)
+        # ถ้าไม่มี ID จริงๆ ให้สร้างจากข้อมูล
+        return f"{props.get('time')}|{props.get('mag')}|{props.get('lat')}|{props.get('lon')}"
+    return str(eq)
 
 def parse_event(eq):
-    props = eq["properties"]
-    coords = eq["geometry"]["coordinates"]
+    """แปลงข้อมูล EMSC ให้เข้ากับรูปแบบเดิมของเรา"""
+    # ตรวจสอบว่าเป็นรูปแบบ GeoJSON (features) หรือแบบ Direct JSON
+    props = eq.get("properties", eq)
+    geom = eq.get("geometry", {})
+    coords = geom.get("coordinates", [props.get("lon"), props.get("lat"), props.get("depth")])
 
-    # EMSC: "time" เป็น ISO string เช่น "2026-05-18T02:05:24.0Z"
-    # USGS: "time" เป็น Unix ms
     time_val = props.get("time", "")
     try:
         ev_dt = datetime.fromisoformat(time_val.replace("Z", "+00:00"))
-    except Exception:
+    except:
         ev_dt = datetime.now(timezone.utc)
 
-    # EMSC: ชื่อสถานที่อยู่ใน "flynn_region" (USGS ใช้ "place")
-    place = props.get("flynn_region") or props.get("place") or "Unknown"
-
-    # EMSC: "auth" คือ agency ที่รายงาน เช่น NEIC, GFZ, EMSC
-    auth = props.get("auth", "EMSC")
-
-    # EMSC: URL ของ event ในหน้าเว็บ SeismicPortal
-    unid = props.get("unid", eq.get("id", ""))
-    emsc_url = f"https://www.seismicportal.eu/eventdetails.html?unid={unid}" if unid else ""
-
+    # EMSC ใช้ flynn_region สำหรับชื่อสถานที่
+    place = props.get("flynn_region") or props.get("place") or "Unknown Region"
+    unid = props.get("unid") or eq.get("id", "")
+    
     return {
-        "id":           build_event_id(eq),
-        "mag":          props.get("mag", 0),
-        "place":        place,
-        "time":         ev_dt.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"),
+        "id": build_event_id(eq),
+        "mag": props.get("mag", 0),
+        "place": place,
+        "time": ev_dt.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"),
         "event_dt_utc": ev_dt,
-        "depth":        coords[2] if len(coords) > 2 else props.get("depth", 0),
-        "lat":          coords[1],
-        "lon":          coords[0],
-        "usgs_url":     emsc_url,   # ใช้ชื่อ field เดิมเพื่อไม่ให้ต้องแก้ส่วนอื่น
-        "map_url":      f"https://www.google.com/maps?q={coords[1]},{coords[0]}",
-        "auth":         auth
+        "depth": coords[2] if len(coords) > 2 else 0,
+        "lat": coords[1],
+        "lon": coords[0],
+        "usgs_url": f"https://www.seismicportal.eu/eventdetails.html?unid={unid}" if unid else "",
+        "map_url": f"https://www.google.com/maps?q={coords[1]},{coords[0]}"
     }
 
 def magnitude_emoji(mag):
@@ -173,71 +169,38 @@ def send_line(events):
 
 def send_email(events):
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
-    rows = ""
-    for i, e in enumerate(events):
-        rows += f"""
-        <tr>
-            <td style='text-align:center'>{i+1}</td>
-            <td style='text-align:center;font-weight:bold'>M{e['mag']}</td>
-            <td>{e['place']}</td>
-            <td style='text-align:center'>{e['time']}</td>
-            <td style='text-align:center'>{e['depth']:.1f} กม.</td>
-            <td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td>
-            <td style='text-align:center'><a href='{e['usgs_url']}'>🔗 EMSC</a></td>
-        </tr>"""
-
-    body = f"""
-    <html><body>
-        <h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE}</h2>
-        <table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'>
-            <thead>
-                <tr style='background:#2c3e50;color:white'>
-                    <th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th>
-                </tr>
-            </thead>
-            <tbody>{rows}</tbody>
-        </table>
-    </body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🌍 แจ้งเตือนแผ่นดินไหว | {now_str}"
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = ", ".join(EMAIL_RECEIVERS)
-    msg.attach(MIMEText(body, "html", "utf-8"))
-
+    rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td><td style='text-align:center'><a href='{e['usgs_url']}'>🔗 EMSC</a></td></tr>" for i, e in enumerate(events)])
+    body = f"<html><body><h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE} (EMSC)</h2><table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'><thead><tr style='background:#2c3e50;color:white'><th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th></tr></thead><tbody>{rows}</tbody></table></body></html>"
+    msg = MIMEMultipart("alternative"); msg["Subject"] = f"🌍 แจ้งเตือนแผ่นดินไหว | {now_str}"; msg["From"] = EMAIL_SENDER; msg["To"] = ", ".join(EMAIL_RECEIVERS); msg.attach(MIMEText(body, "html", "utf-8"))
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
+            server.starttls(); server.login(EMAIL_SENDER, EMAIL_PASSWORD); server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
         return True
     except: return False
 
 if __name__ == "__main__":
-    print(f"🔍 กำลังดึงข้อมูลแผ่นดินไหว ≥ {MIN_MAGNITUDE} จาก EMSC SeismicPortal")
-    print(f"   อัปเดตย้อนหลัง {HOURS_BACK*60:.0f} นาที | เกิดจริงไม่เกิน {MAX_EVENT_AGE_HOURS} ชั่วโมง")
+    print(f"🔍 [EMSC Mode] เริ่มการตรวจสอบแผ่นดินไหว...")
     try:
         sent_ids = load_sent_ids(); sent_id_set = set(sent_ids)
         print(f"📚 โหลด history มาแล้ว {len(sent_ids)} IDs")
+        
         fetched_features = fetch_earthquakes()
-        parsed_events = [parse_event(f) for f in fetched_features]
-        print(f"📊 พบจาก EMSC {len(parsed_events)} รายการ")
-
+        parsed_events = [parse_event(f) for f in fetched_features if f]
+        print(f"📊 พบรายการอัปเดตในระบบ EMSC {len(parsed_events)} รายการ")
+        
         now_utc = datetime.now(timezone.utc)
-        events = [e for e in parsed_events if (timedelta(0) <= (now_utc - e["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS))]
-        print(f"📊 เหลือ event ที่เวลาเกิดอยู่ในช่วงที่อนุญาต {len(events)} รายการ")
-
-        filtered_events = [e for e in events if is_target_location(e)]
+        recent_events = [e for e in parsed_events if (timedelta(0) <= (now_utc - e["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS))]
+        print(f"📊 เหลือรายการที่เกิดภายใน {MAX_EVENT_AGE_HOURS} ชม.: {len(recent_events)} รายการ")
+        
+        filtered_events = [e for e in recent_events if is_target_location(e)]
         new_events = [e for e in filtered_events if e["id"] not in sent_id_set]
 
         if new_events:
             print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
-            for event in new_events: print(f"   - {event['id']} | M{event['mag']} | {event['place']}")
             if send_line(new_events) and send_email(new_events):
                 save_sent_ids(sent_ids + [e["id"] for e in new_events])
-            else: print("⚠️ ส่งแจ้งเตือนไม่สำเร็จ")
         else:
-            print("✅ ไม่มีแผ่นดินไหวใหม่")
+            print("✅ ตรวจสอบแล้ว: ไม่มีแผ่นดินไหวใหม่ในพื้นที่เฝ้าระวัง")
             save_sent_ids(sent_ids)
         print("\n✅ สำเร็จทั้งหมด!")
     except Exception as e:
