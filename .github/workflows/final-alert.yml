@@ -40,7 +40,7 @@ jobs:
       - name: Run earthquake alert
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
+          LINE_GROUP_IDS: ${{ secrets.LINE_GROUP_IDS }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
