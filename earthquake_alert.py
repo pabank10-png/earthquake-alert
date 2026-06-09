@@ -189,29 +189,13 @@ def send_email(events):
     except: return False
 
 if __name__ == "__main__":
-    print(f"🔍 [EMSC Mode] เริ่มการตรวจสอบแผ่นดินไหว...")
-    try:
-        sent_ids = load_sent_ids(); sent_id_set = set(sent_ids)
-        print(f"📚 โหลด history มาแล้ว {len(sent_ids)} IDs")
-        
-        fetched_features = fetch_earthquakes()
-        parsed_events = [parse_event(f) for f in fetched_features if f]
-        print(f"📊 พบรายการอัปเดตในระบบ EMSC {len(parsed_events)} รายการ")
-        
-        now_utc = datetime.now(timezone.utc)
-        recent_events = [e for e in parsed_events if (timedelta(0) <= (now_utc - e["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS))]
-        print(f"📊 เหลือรายการที่เกิดภายใน {MAX_EVENT_AGE_HOURS} ชม.: {len(recent_events)} รายการ")
-        
-        filtered_events = [e for e in recent_events if is_target_location(e)]
-        new_events = [e for e in filtered_events if e["id"] not in sent_id_set]
-
-        if new_events:
-            print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
-            if send_line(new_events) and send_email(new_events):
-                save_sent_ids(sent_ids + [e["id"] for e in new_events])
-        else:
-            print("✅ ตรวจสอบแล้ว: ไม่มีแผ่นดินไหวใหม่ในพื้นที่เฝ้าระวัง")
-            save_sent_ids(sent_ids)
-        print("\n✅ สำเร็จทั้งหมด!")
-    except Exception as e:
-        print(f"\n❌ เกิดข้อผิดพลาด: {e}"); raise
+    # === TEST MODE ===
+    print("🧪 TEST MODE: ส่ง dummy event...")
+    test_event = [{
+        "mag": 5.5, "place": "TEST — ทดสอบระบบแจ้งเตือน LINE หลายกลุ่ม",
+        "time": "09 Jun 2026 12:00 ICT", "depth": 10.0,
+        "map_url": "https://www.google.com/maps", "usgs_url": ""
+    }]
+    result = send_line(test_event)
+    print(f"LINE result: {result}")
+    print("\n✅ TEST เสร็จแล้ว!")
