@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 # ⚙️ ตั้งค่าระบบ
 # ============================================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_TOKEN", "")
-LINE_GROUP_ID = os.getenv("LINE_GROUP_ID", "")
+LINE_GROUP_IDS = [gid.strip() for gid in os.getenv("LINE_GROUP_IDS", "").split(",") if gid.strip()]
 EMAIL_SENDER = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_RECEIVERS = [email.strip() for email in os.getenv("EMAIL_RECEIVERS", "").split(",") if email.strip()]
@@ -164,9 +164,19 @@ def send_line(events):
     for i, e in enumerate(events[:10], 1):
         lines.append(f"{magnitude_emoji(e['mag'])} [{i}] M{e['mag']} — {e['place']}\n   🕐 {e['time']}\n   📍 ความลึก {e['depth']:.1f} กม.\n   🗺 {e['map_url']}\n")
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
-    resp = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json={"to": LINE_GROUP_ID, "messages": [{"type": "text", "text": "\n".join(lines)}]}, timeout=15)
-    return resp.status_code == 200
-
+    message_text = "\n".join(lines)
+    all_ok = True
+    for group_id in LINE_GROUP_IDS:
+        resp = requests.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers=headers,
+            json={"to": group_id, "messages": [{"type": "text", "text": message_text}]},
+            timeout=15
+        )
+        if resp.status_code != 200:
+            print(f"⚠️ ส่ง LINE ไปยัง {group_id} ไม่สำเร็จ: {resp.text}")
+            all_ok = False
+    return all_ok
 def send_email(events):
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
     rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td><td style='text-align:center'><a href='{e['usgs_url']}'>🔗 EMSC</a></td></tr>" for i, e in enumerate(events)])
