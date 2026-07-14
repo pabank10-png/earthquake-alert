@@ -239,7 +239,16 @@ def magnitude_emoji(mag):
 def send_line(events):
     lines = [f"🌍 แจ้งเตือนแผ่นดินไหว (≥ {MIN_MAGNITUDE})\n"]
     for i, e in enumerate(events[:10], 1):
-        lines.append(f"{magnitude_emoji(e['mag'])} [{i}] M{e['mag']} — {e['place']}\n   🕐 {e['time']}\n   📍 ความลึก {e['depth']:.1f} กม.\n   🗺 {e['map_url']}\n")
+        source = e.get("source", "ข้อมูลต้นทาง")
+        source_url = e.get("source_url") or e.get("usgs_url", "")
+        source_line = f"   🔗 {source}: {source_url}\n" if source_url else ""
+        lines.append(
+            f"{magnitude_emoji(e['mag'])} [{i}] M{e['mag']} — {e['place']}\n"
+            f"   🕐 {e['time']}\n"
+            f"   📍 ความลึก {e['depth']:.1f} กม.\n"
+            f"   🗺 {e['map_url']}\n"
+            f"{source_line}"
+        )
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
     message_text = "\n".join(lines)
     all_ok = True
