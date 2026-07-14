@@ -2,6 +2,9 @@ import os
 import json
 import requests
 import smtplib
+import re
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from math import radians, cos, sin, asin, sqrt
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -23,6 +26,10 @@ HOURS_BACK = 0.25
 MAX_EVENT_AGE_HOURS = 36 
 SENT_FILE = "sent_earthquakes.json"
 MAX_HISTORY = 200
+SOURCE_MATCH_TIME_MINUTES = 5
+SOURCE_MATCH_DISTANCE_KM = 50
+SOURCE_MATCH_MAG_DIFF = 0.6
+TMD_RSS_URL = "https://earthquake.tmd.go.th/feed/rss_tmd.xml"
 
 MONITORED_POINTS = [
     {"lat": 39.60594025, "lon": -8.852126644},
@@ -59,19 +66,39 @@ def is_target_location(event):
         if haversine(point['lat'], point['lon'], lat, lon) <= RADIUS_KM: return True
     return False
 
-def load_sent_ids():
+def load_history():
+    """Load sent history, including legacy ID-only entries."""
     try:
         with open(SENT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return [str(item) for item in data if item] if isinstance(data, list) else []
-    except: return []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
-def save_sent_ids(sent_ids):
-    unique_ids = list(dict.fromkeys(str(item) for item in sent_ids if item))
-    recent_ids = unique_ids[-MAX_HISTORY:]
+    if not isinstance(data, list):
+        return []
+
+    history = []
+    for item in data:
+        if isinstance(item, str) and item:
+            history.append({"legacy_id": item})
+        elif isinstance(item, dict):
+            history.append(item)
+    return history
+
+
+def save_history(history):
+    """Save recent event fingerprints and source IDs."""
+    unique = {}
+    for item in history:
+        key = item.get("fingerprint") or f"{item.get('source', '')}:{item.get('source_id', '')}"
+        if key:
+            unique[key] = item
+
+    recent = list(unique.values())[-MAX_HISTORY:]
     with open(SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(recent_ids, f, ensure_ascii=False, indent=2)
-    print(f"💾 บันทึก history แล้ว {len(recent_ids)} IDs")
+        json.dump(recent, f, ensure_ascii=False, indent=2)
+    print(f"💾 บันทึก history แล้ว {len(recent)} รายการ")
+
 
 def fetch_earthquakes():
     """ดึงข้อมูลจาก EMSC - จัดการ Error กรณีข้อมูลว่าง"""
@@ -112,6 +139,53 @@ def fetch_earthquakes():
             try: events.append(json.loads(line))
             except: continue
         return events
+
+def parse_source_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return parsedate_to_datetime(str(value)).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+
+def fetch_tmd_earthquakes():
+    """Fetch TMD's official RSS feed."""
+    resp = requests.get(TMD_RSS_URL, timeout=30)
+    resp.raise_for_status()
+    root = ET.fromstring(resp.content)
+    ns = {"geo": "http://www.w3.org/2003/01/geo/", "tmd": "http://www.earthquake.tmd.go.th"}
+    events = []
+
+    for item in root.findall("./channel/item"):
+        link = item.findtext("link", "")
+        event_time = parse_source_time(item.findtext("tmd:time", "", ns).replace(" UTC", "+00:00"))
+        available_at = parse_source_time(item.findtext("pubDate", ""))
+        if not event_time:
+            continue
+
+        event_id = link.split("earthquake=")[-1] if "earthquake=" in link else ""
+        events.append({
+            "id": event_id or f"TMD-{event_time.isoformat()}",
+            "source": "TMD",
+            "source_id": event_id,
+            "available_at": available_at or event_time,
+            "event_dt_utc": event_time,
+            "mag": float(item.findtext("tmd:magnitude", "0", ns)),
+            "place": item.findtext("title", "Unknown Region").split(" (", 1)[0],
+            "time": event_time.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"),
+            "depth": float(item.findtext("tmd:depth", "0", ns)),
+            "lat": float(item.findtext("geo:lat", "0", ns)),
+            "lon": float(item.findtext("geo:long", "0", ns)),
+            "source_url": link,
+            "usgs_url": link,
+            "map_url": f"https://www.google.com/maps?q={item.findtext('geo:lat', '0', ns)},{item.findtext('geo:long', '0', ns)}",
+        })
+    return events
+
 
 def build_event_id(eq):
     # EMSC มี field ต่างจาก USGS เล็กน้อย
@@ -179,7 +253,7 @@ def send_line(events):
     return all_ok
 def send_email(events):
     now_str = datetime.now(ICT).strftime("%d %b %Y %H:%M ICT")
-    rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td><td style='text-align:center'><a href='{e['usgs_url']}'>🔗 EMSC</a></td></tr>" for i, e in enumerate(events)])
+    rows = "".join([f"<tr><td style='text-align:center'>{i+1}</td><td style='text-align:center;font-weight:bold'>M{e['mag']}</td><td>{e['place']}</td><td style='text-align:center'>{e['time']}</td><td style='text-align:center'>{e['depth']:.1f} กม.</td><td style='text-align:center'><a href='{e['map_url']}'>📍 Map</a></td><td style='text-align:center'><a href='{e['usgs_url']}'>🔗 {e.get('source', 'EMSC')}</a></td></tr>" for i, e in enumerate(events)])
     body = f"<html><body><h2>🌍 รายงานแผ่นดินไหว ≥ {MIN_MAGNITUDE} (EMSC)</h2><table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%'><thead><tr style='background:#2c3e50;color:white'><th>#</th><th>ขนาด</th><th>สถานที่</th><th>เวลา (ICT)</th><th>ความลึก</th><th>แผนที่</th><th>ข้อมูล</th></tr></thead><tbody>{rows}</tbody></table></body></html>"
     msg = MIMEMultipart("alternative"); msg["Subject"] = f"🌍 แจ้งเตือนแผ่นดินไหว | {now_str}"; msg["From"] = EMAIL_SENDER; msg["To"] = ", ".join(EMAIL_RECEIVERS); msg.attach(MIMEText(body, "html", "utf-8"))
     try:
@@ -188,30 +262,95 @@ def send_email(events):
         return True
     except: return False
 
-if __name__ == "__main__":
-    print(f"🔍 [EMSC Mode] เริ่มการตรวจสอบแผ่นดินไหว...")
-    try:
-        sent_ids = load_sent_ids(); sent_id_set = set(sent_ids)
-        print(f"📚 โหลด history มาแล้ว {len(sent_ids)} IDs")
-        
-        fetched_features = fetch_earthquakes()
-        parsed_events = [parse_event(f) for f in fetched_features if f]
-        print(f"📊 พบรายการอัปเดตในระบบ EMSC {len(parsed_events)} รายการ")
-        
-        now_utc = datetime.now(timezone.utc)
-        recent_events = [e for e in parsed_events if (timedelta(0) <= (now_utc - e["event_dt_utc"]) <= timedelta(hours=MAX_EVENT_AGE_HOURS))]
-        print(f"📊 เหลือรายการที่เกิดภายใน {MAX_EVENT_AGE_HOURS} ชม.: {len(recent_events)} รายการ")
-        
-        filtered_events = [e for e in recent_events if is_target_location(e)]
-        new_events = [e for e in filtered_events if e["id"] not in sent_id_set]
+def same_event(a, b):
+    """Match the same physical event across TMD and EMSC catalogs."""
+    time_diff = abs((a["event_dt_utc"] - b["event_dt_utc"]).total_seconds()) / 60
+    distance = haversine(a["lat"], a["lon"], b["lat"], b["lon"])
+    magnitude_diff = abs(float(a["mag"]) - float(b["mag"]))
+    return (
+        time_diff <= SOURCE_MATCH_TIME_MINUTES
+        and distance <= SOURCE_MATCH_DISTANCE_KM
+        and magnitude_diff <= SOURCE_MATCH_MAG_DIFF
+    )
 
+
+def history_contains(event, history):
+    for item in history:
+        if event["source_id"] and event["source_id"] == item.get("source_id"):
+            return True
+        if item.get("event_time"):
+            stored = dict(item)
+            stored["event_dt_utc"] = parse_source_time(item["event_time"])
+            if stored["event_dt_utc"] and same_event(event, stored):
+                return True
+        if event["id"] == item.get("legacy_id"):
+            return True
+    return False
+
+
+def history_record(event):
+    return {
+        "fingerprint": "|".join((
+            event["event_dt_utc"].strftime("%Y-%m-%dT%H:%M:%S"),
+            f"{event['lat']:.3f}",
+            f"{event['lon']:.3f}",
+        )),
+        "event_time": event["event_dt_utc"].isoformat(),
+        "lat": event["lat"],
+        "lon": event["lon"],
+        "mag": event["mag"],
+        "source": event["source"],
+        "source_id": event["source_id"],
+    }
+
+
+def choose_first_source(events):
+    """Collapse cross-source duplicates and keep the earliest published record."""
+    chosen = []
+    for event in sorted(events, key=lambda item: item["available_at"]):
+        match = next((item for item in chosen if same_event(event, item)), None)
+        if match is None:
+            chosen.append(event)
+    return chosen
+
+
+if __name__ == "__main__":
+    print("🔍 [TMD + EMSC] เริ่มการตรวจสอบแผ่นดินไหว...")
+    try:
+        history = load_history()
+        print(f"📚 โหลด history มาแล้ว {len(history)} รายการ")
+
+        emsc_raw = fetch_earthquakes()
+        emsc_events = [parse_event(item) for item in emsc_raw if item]
+        for raw, event in zip(emsc_raw, emsc_events):
+            props = raw.get("properties", raw)
+            event["source"] = "EMSC"
+            event["source_id"] = event["id"]
+            event["available_at"] = parse_source_time(props.get("lastupdate")) or event["event_dt_utc"]
+            event["source_url"] = event.get("usgs_url", "")
+
+        tmd_events = fetch_tmd_earthquakes()
+        all_events = emsc_events + tmd_events
+        print(f"📊 EMSC {len(emsc_events)} รายการ | TMD {len(tmd_events)} รายการ")
+
+        now_utc = datetime.now(timezone.utc)
+        recent = [e for e in all_events if timedelta(0) <= now_utc - e["event_dt_utc"] <= timedelta(hours=MAX_EVENT_AGE_HOURS)]
+        in_area = [e for e in recent if is_target_location(e)]
+        selected = choose_first_source(in_area)
+        new_events = [e for e in selected if not history_contains(e, history)]
+
+        print(f"📊 เหลือ event ล่าสุดในพื้นที่ {len(selected)} รายการ")
         if new_events:
-            print(f"🆕 พบแผ่นดินไหวใหม่ {len(new_events)} รายการ")
+            print(f"🆕 พบ event ใหม่ {len(new_events)} รายการ")
+            for event in new_events:
+                print(f"   - [{event['source']}] {event['source_id']} | M{event['mag']} | {event['place']}")
             if send_line(new_events) and send_email(new_events):
-                save_sent_ids(sent_ids + [e["id"] for e in new_events])
+                history.extend(history_record(event) for event in new_events)
+                save_history(history)
         else:
-            print("✅ ตรวจสอบแล้ว: ไม่มีแผ่นดินไหวใหม่ในพื้นที่เฝ้าระวัง")
-            save_sent_ids(sent_ids)
+            print("✅ ไม่มีแผ่นดินไหวใหม่ในพื้นที่เฝ้าระวัง")
+            save_history(history)
         print("\n✅ สำเร็จทั้งหมด!")
     except Exception as e:
-        print(f"\n❌ เกิดข้อผิดพลาด: {e}"); raise
+        print(f"\n❌ เกิดข้อผิดพลาด: {e}")
+        raise
