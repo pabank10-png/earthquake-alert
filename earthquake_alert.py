@@ -334,7 +334,10 @@ if __name__ == "__main__":
         print(f"📊 EMSC {len(emsc_events)} รายการ | TMD {len(tmd_events)} รายการ")
 
         now_utc = datetime.now(timezone.utc)
-        recent = [e for e in all_events if timedelta(0) <= now_utc - e["event_dt_utc"] <= timedelta(hours=MAX_EVENT_AGE_HOURS)]
+        recent = [e for e in all_events if (
+            e["mag"] >= MIN_MAGNITUDE
+            and timedelta(0) <= now_utc - e["event_dt_utc"] <= timedelta(hours=MAX_EVENT_AGE_HOURS)
+        )]
         in_area = [e for e in recent if is_target_location(e)]
         selected = choose_first_source(in_area)
         new_events = [e for e in selected if not history_contains(e, history)]
