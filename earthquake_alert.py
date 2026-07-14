@@ -175,7 +175,7 @@ def fetch_tmd_earthquakes():
             "available_at": available_at or event_time,
             "event_dt_utc": event_time,
             "mag": float(item.findtext("tmd:magnitude", "0", ns)),
-            "place": item.findtext("title", "Unknown Region").split(" (", 1)[0],
+            "place": item.findtext("title", "Unknown Region").strip(),
             "time": event_time.astimezone(ICT).strftime("%d %b %Y %H:%M ICT"),
             "depth": float(item.findtext("tmd:depth", "0", ns)),
             "lat": float(item.findtext("geo:lat", "0", ns)),
