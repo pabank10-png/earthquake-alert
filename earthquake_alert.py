@@ -40,6 +40,9 @@ MONITORED_POINTS = [
     {"lat": 52.40515851, "lon": 5.244806542}
 ]
 RADIUS_KM = 600
+MONITORED_BOUNDS = [
+    {"min_lat": -15, "max_lat": 30, "min_lon": 88, "max_lon": 145},
+]
 ICT = timezone(timedelta(hours=7))
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -51,19 +54,19 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 def is_target_location(event):
-    place = event['place'].lower()
     lat, lon = event['lat'], event['lon']
-    sea_keywords = [
-        "thailand", "myanmar", "burma", "laos", "vietnam", "cambodia",
-        "malaysia", "singapore", "indonesia", "philippines", "brunei",
-        "timor-leste", "papua new guinea", "andaman", "sumatra", "java",
-        "sulawesi", "borneo", "luzon", "mindanao", "molucca", "banda sea",
-        "celebes sea", "sulu sea", "south china sea", "gulf of thailand",
-        "sea", "ocean"
-    ]
-    if any(k in place for k in sea_keywords): return True
+
+    for bounds in MONITORED_BOUNDS:
+        if (
+            bounds["min_lat"] <= lat <= bounds["max_lat"]
+            and bounds["min_lon"] <= lon <= bounds["max_lon"]
+        ):
+            return True
+
     for point in MONITORED_POINTS:
-        if haversine(point['lat'], point['lon'], lat, lon) <= RADIUS_KM: return True
+        if haversine(point['lat'], point['lon'], lat, lon) <= RADIUS_KM:
+            return True
+
     return False
 
 def load_history():
