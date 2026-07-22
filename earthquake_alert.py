@@ -155,6 +155,16 @@ def parse_source_time(value):
             return None
 
 
+def is_recent_tmd_publication(event, now_utc):
+    """Accept TMD entries published from now back through the last 15 minutes."""
+    published_at = event.get("available_at")
+    if published_at is None:
+        return False
+
+    publication_age = now_utc - published_at
+    return timedelta(0) <= publication_age <= timedelta(hours=HOURS_BACK)
+
+
 def fetch_tmd_earthquakes():
     """Fetch TMD's official RSS feed."""
     resp = requests.get(TMD_RSS_URL, timeout=30)
@@ -175,7 +185,7 @@ def fetch_tmd_earthquakes():
             "id": event_id or f"TMD-{event_time.isoformat()}",
             "source": "TMD",
             "source_id": event_id,
-            "available_at": available_at or event_time,
+            "available_at": available_at,
             "event_dt_utc": event_time,
             "mag": float(item.findtext("tmd:magnitude", "0", ns)),
             "place": item.findtext("title", "Unknown Region").strip(),
@@ -341,11 +351,25 @@ if __name__ == "__main__":
             event["available_at"] = parse_source_time(props.get("lastupdate")) or event["event_dt_utc"]
             event["source_url"] = event.get("usgs_url", "")
 
-        tmd_events = fetch_tmd_earthquakes()
-        all_events = emsc_events + tmd_events
-        print(f"📊 EMSC {len(emsc_events)} รายการ | TMD {len(tmd_events)} รายการ")
-
         now_utc = datetime.now(timezone.utc)
+        tmd_events = fetch_tmd_earthquakes()
+        recent_tmd_events = [
+            event for event in tmd_events
+            if is_recent_tmd_publication(event, now_utc)
+        ]
+        rejected_tmd_count = len(tmd_events) - len(recent_tmd_events)
+        all_events = emsc_events + recent_tmd_events
+        print(
+            f"📊 EMSC {len(emsc_events)} รายการ | "
+            f"TMD RSS {len(tmd_events)} รายการ | "
+            f"TMD pubDate ≤ {HOURS_BACK * 60:.0f} นาที {len(recent_tmd_events)} รายการ"
+        )
+        if rejected_tmd_count:
+            print(
+                f"🧹 ตัด TMD {rejected_tmd_count} รายการ "
+                "เพราะ pubDate เกิน 15 นาที ไม่มีค่า หรือเป็นเวลาในอนาคต"
+            )
+
         recent = [e for e in all_events if (
             e["mag"] >= MIN_MAGNITUDE
             and timedelta(0) <= now_utc - e["event_dt_utc"] <= timedelta(hours=MAX_EVENT_AGE_HOURS)
