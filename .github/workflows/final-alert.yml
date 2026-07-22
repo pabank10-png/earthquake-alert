@@ -3,6 +3,9 @@ name: Earthquake Auto Alert
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: earthquake-auto-alert
   cancel-in-progress: false
@@ -18,15 +21,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Restore earthquake history
-        id: earthquake-history
-        uses: actions/cache/restore@v4
-        with:
-          path: sent_earthquakes.json
-          key: earthquake-history-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            earthquake-history-${{ runner.os }}-
 
       - name: Ensure history file exists
         run: |
@@ -46,9 +40,15 @@ jobs:
           EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
         run: python earthquake_alert.py
 
-      - name: Save earthquake history
+      - name: Commit earthquake history
         if: ${{ success() && hashFiles('sent_earthquakes.json') != '' }}
-        uses: actions/cache/save@v4
-        with:
-          path: sent_earthquakes.json
-          key: earthquake-history-${{ runner.os }}-${{ github.run_id }}
+        run: |
+          if git diff --quiet -- sent_earthquakes.json; then
+            echo "No history changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sent_earthquakes.json
+          git commit -m "chore: update earthquake history [skip ci]"
+          git push
